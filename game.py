@@ -8,7 +8,8 @@ class GameConfig:
     CANVAS_HEIGHT = 600
     PLAYER_SPEED = 200
     PLAYER_SIZE = 10
-    PLAYER_COLOR = (0, 0, 255)
+    PLAYER_COLOR = (0, 0, 255)  # Blue
+    PLAYER_FLASH_COLOR = (255, 0, 0)  # Red
     BULLET_SIZE = 8
     BULLET_SPEED = 150
     BULLET_COLOR = (255, 255, 0)
@@ -16,6 +17,13 @@ class GameConfig:
     DIFFICULTY_INCREASE_INTERVAL = 60000
     BULLET_LIFETIME = 30000
     BULLET_SPLIT_SIZE_RATIO = 0.7
+    MINIMUM_BULLET_SIZE = 4  # New constant for minimum bullet size
+
+def random_color(exclude_colors):
+    while True:
+        color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+        if color not in exclude_colors and sum(color) > 30:  # Ensure it's not too dark
+            return color
 
 # Game entities
 class GameObject:
@@ -64,10 +72,13 @@ class Player(GameObject):
         self.radius += 1
 
 class Bullet(GameObject):
-    def __init__(self, x, y, direction, size=None):
+    def __init__(self, x, y, direction, size=None, color=None):
         size = size or GameConfig.BULLET_SIZE
-        super().__init__(x, y, size, size, GameConfig.BULLET_COLOR)
-        self.direction = direction
+        if color is None:
+            exclude_colors = [(0, 0, 0), GameConfig.PLAYER_COLOR, GameConfig.PLAYER_FLASH_COLOR]
+            color = random_color(exclude_colors)
+        super().__init__(x, y, size, size, color)
+        self.direction = direction  # direction should be a tuple (dx, dy)
         self.speed = GameConfig.BULLET_SPEED
         self.radius = size // 2
         self.spawn_time = pygame.time.get_ticks()
@@ -91,8 +102,8 @@ class Bullet(GameObject):
 
     def split(self):
         new_size = int(self.width * GameConfig.BULLET_SPLIT_SIZE_RATIO)
-        if new_size < 2:  # Don't split if the new size would be too small
-            return []
+        if new_size < GameConfig.MINIMUM_BULLET_SIZE:
+            return []  # Return an empty list, effectively "dying" instead of splitting
         
         angle1 = random.uniform(0, 2 * math.pi)
         angle2 = angle1 + math.pi
@@ -146,8 +157,9 @@ def handle_bullet_collisions(bullets):
             if bullet.collides_with(other):
                 bullets_to_remove.add(bullet)
                 bullets_to_remove.add(other)
-                new_bullets.extend(bullet.split())
-                new_bullets.extend(other.split())
+                split_bullets = bullet.split() + other.split()
+                if split_bullets:  # Only add new bullets if splitting occurred
+                    new_bullets.extend(split_bullets)
                 break
 
     return bullets_to_remove, new_bullets
