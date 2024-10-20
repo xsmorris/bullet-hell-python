@@ -18,11 +18,14 @@ class GameConfig:
     BULLET_LIFETIME = 30000
     BULLET_SPLIT_SIZE_RATIO = 0.7
     MINIMUM_BULLET_SIZE = 4  # New constant for minimum bullet size
+    SHIELD_DURATION = 3000  # 3 seconds in milliseconds
+    SHIELD_COOLDOWN = 30000  # 30 seconds in milliseconds
+    SHIELD_COLOR = (0, 255, 255)  # Cyan
 
 def random_color(exclude_colors):
     while True:
         color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-        if color not in exclude_colors and sum(color) > 30:  # Ensure it's not too dark
+        if color not in exclude_colors and sum(color) > 50:  # Ensure it's not too dark
             return color
 
 # Game entities
@@ -45,18 +48,34 @@ class Player(GameObject):
         self.hit_flash_duration = 200
         self.last_hit_time = 0
         self.is_dead = False
+        self.shield_active = False
+        self.shield_start_time = 0
+        self.shield_end_time = 0
+        self.last_shield_use = None  # Changed this line
         self.radius = width // 2
 
     def reset_health(self):
         self.health = 100
 
     def take_damage(self, amount):
-        self.health -= amount
-        self.last_hit_time = pygame.time.get_ticks()
-        print(f"Player health: {self.health}")
-        if self.health <= 0:
-            print("Game Over! Restarting...")
-            self.is_dead = True
+        if not self.shield_active:
+            self.health -= amount
+            self.last_hit_time = pygame.time.get_ticks()
+            print(f"Player health: {self.health}")
+            if self.health <= 0:
+                print("Game Over! Restarting...")
+                self.is_dead = True
+
+    def activate_shield(self, current_time):
+        if not self.shield_active and (self.last_shield_use is None or 
+                                       current_time - self.last_shield_use >= GameConfig.SHIELD_COOLDOWN):
+            self.shield_active = True
+            self.shield_start_time = current_time
+
+    def update_shield(self, current_time):
+        if self.shield_active and current_time - self.shield_start_time >= GameConfig.SHIELD_DURATION:
+            self.shield_active = False
+            self.last_shield_use = current_time
 
     def render(self, screen):
         current_time = pygame.time.get_ticks()
@@ -65,11 +84,30 @@ class Player(GameObject):
         else:
             color = self.original_color
         pygame.draw.circle(screen, color, (int(self.x + self.radius), int(self.y + self.radius)), self.radius)
+        if self.shield_active:
+            pygame.draw.circle(screen, GameConfig.SHIELD_COLOR, 
+                               (int(self.x + self.width / 2), int(self.y + self.height / 2)), 
+                               int(max(self.width, self.height) / 2 + 5), 2)
+
+    def get_shield_cooldown(self, current_time):
+        time_since_last_use = current_time - self.last_shield_use
+        return max(0, (GameConfig.SHIELD_COOLDOWN - time_since_last_use) / 1000)
 
     def increase_size(self):
         self.width += 2
         self.height += 2
         self.radius += 1
+
+    def get_shield_status(self, current_time):
+        if self.shield_active:
+            remaining_time = (GameConfig.SHIELD_DURATION - (current_time - self.shield_start_time)) / 1000
+            return f"Shield Active: {remaining_time:.1f}s"
+        elif self.last_shield_use is not None:
+            time_since_last_use = current_time - self.last_shield_use
+            if time_since_last_use < GameConfig.SHIELD_COOLDOWN:
+                cooldown = (GameConfig.SHIELD_COOLDOWN - time_since_last_use) / 1000
+                return f"Shield Cooldown: {cooldown:.1f}s"
+        return "Shield Available"
 
 class Bullet(GameObject):
     def __init__(self, x, y, direction, size=None, color=None):
@@ -235,15 +273,14 @@ last_difficulty_level = 1
 
 while running:
     delta_time = clock.tick(60) / 1000.0
+    current_time = pygame.time.get_ticks()
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-
-    if player.is_dead:
-        restart_game()
-        difficulty_level = 1  # Reset difficulty level
-        continue
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE:
+                player.activate_shield(current_time)
 
     keys = pygame.key.get_pressed()
     if keys[pygame.K_LEFT]:
@@ -255,7 +292,13 @@ while running:
     if keys[pygame.K_DOWN]:
         player.y = min(player.y + GameConfig.PLAYER_SPEED * delta_time, GameConfig.CANVAS_HEIGHT - player.height)
 
-    current_time = pygame.time.get_ticks()
+    player.update_shield(current_time)
+
+    if player.is_dead:
+        restart_game()
+        difficulty_level = 1  # Reset difficulty level
+        continue
+
     elapsed_time = current_time - start_time
 
     # Increase difficulty every minute
@@ -272,14 +315,14 @@ while running:
     update_bullets(delta_time)
 
     # Render
-    screen.fill((0, 0, 0))  
+    screen.fill((0, 0, 0))  # Black background
 
     for entity in game_entities:
         entity.render(screen)
 
     # Render health bar
-    health_bar_width = 250  
-    health_bar_height = 40  
+    health_bar_width = 250  # 250 pixels wide
+    health_bar_height = 40  # 40 pixels high
     pygame.draw.rect(screen, (128, 128, 128), (10, 10, health_bar_width, health_bar_height))
     pygame.draw.rect(screen, (0, 255, 0), (10, 10, int(player.health * 2.5), health_bar_height))
     pygame.draw.rect(screen, (255, 255, 255), (10, 10, health_bar_width, health_bar_height), 2)
@@ -299,6 +342,19 @@ while running:
 
     difficulty_text = font.render(f"Difficulty: {difficulty_level}", True, (255, 255, 255))
     screen.blit(difficulty_text, (10, 100))
+
+    # Render shield status
+    shield_status = player.get_shield_status(current_time)
+    if shield_status.startswith("Shield Active"):
+        color = (0, 255, 255)  # Cyan for active shield
+    elif shield_status == "Shield Available":
+        color = (0, 255, 0)  # Green for available shield
+    else:
+        color = (255, 255, 0)  # Yellow for cooldown
+    shield_text = font.render(shield_status, True, color)
+    shield_text_rect = shield_text.get_rect()
+    shield_text_rect.bottomleft = (10, GameConfig.CANVAS_HEIGHT - 10)
+    screen.blit(shield_text, shield_text_rect)
 
     pygame.display.flip()
 
