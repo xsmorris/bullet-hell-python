@@ -1,0 +1,293 @@
+import pygame
+import math
+import random
+
+# Game configuration
+class GameConfig:
+    CANVAS_WIDTH = 900
+    CANVAS_HEIGHT = 600
+    PLAYER_SPEED = 200
+    PLAYER_SIZE = 10
+    PLAYER_COLOR = (0, 0, 255)
+    BULLET_SIZE = 8
+    BULLET_SPEED = 150
+    BULLET_COLOR = (255, 255, 0)
+    BULLET_SPAWN_INTERVAL = 2000
+    DIFFICULTY_INCREASE_INTERVAL = 60000
+    BULLET_LIFETIME = 30000
+    BULLET_SPLIT_SIZE_RATIO = 0.7
+
+# Game entities
+class GameObject:
+    def __init__(self, x, y, width, height, color):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.color = color
+
+    def render(self, screen):
+        pygame.draw.rect(screen, self.color, (self.x, self.y, self.width, self.height))
+
+class Player(GameObject):
+    def __init__(self, x, y, width, height, color):
+        super().__init__(x, y, width, height, color)
+        self.reset_health()
+        self.original_color = color
+        self.hit_flash_duration = 200
+        self.last_hit_time = 0
+        self.is_dead = False
+        self.radius = width // 2
+
+    def reset_health(self):
+        self.health = 100
+
+    def take_damage(self, amount):
+        self.health -= amount
+        self.last_hit_time = pygame.time.get_ticks()
+        print(f"Player health: {self.health}")
+        if self.health <= 0:
+            print("Game Over! Restarting...")
+            self.is_dead = True
+
+    def render(self, screen):
+        current_time = pygame.time.get_ticks()
+        if current_time - self.last_hit_time < self.hit_flash_duration:
+            color = (255, 0, 0)
+        else:
+            color = self.original_color
+        pygame.draw.circle(screen, color, (int(self.x + self.radius), int(self.y + self.radius)), self.radius)
+
+    def increase_size(self):
+        self.width += 2
+        self.height += 2
+        self.radius += 1
+
+class Bullet(GameObject):
+    def __init__(self, x, y, direction, size=None):
+        size = size or GameConfig.BULLET_SIZE
+        super().__init__(x, y, size, size, GameConfig.BULLET_COLOR)
+        self.direction = direction
+        self.speed = GameConfig.BULLET_SPEED
+        self.radius = size // 2
+        self.spawn_time = pygame.time.get_ticks()
+
+    def update(self, delta_time):
+        dx, dy = self.direction
+        self.x += dx * self.speed * delta_time
+        self.y += dy * self.speed * delta_time
+
+    def render(self, screen):
+        pygame.draw.circle(screen, self.color, (int(self.x + self.radius), int(self.y + self.radius)), self.radius)
+
+    def collides_with(self, other):
+        dx = self.x - other.x
+        dy = self.y - other.y
+        distance = math.sqrt(dx * dx + dy * dy)
+        return distance < self.radius + other.radius
+
+    def should_despawn(self, current_time):
+        return current_time - self.spawn_time > GameConfig.BULLET_LIFETIME
+
+    def split(self):
+        new_size = int(self.width * GameConfig.BULLET_SPLIT_SIZE_RATIO)
+        if new_size < 2:  # Don't split if the new size would be too small
+            return []
+        
+        angle1 = random.uniform(0, 2 * math.pi)
+        angle2 = angle1 + math.pi
+        
+        dir1 = (math.cos(angle1), math.sin(angle1))
+        dir2 = (math.cos(angle2), math.sin(angle2))
+        
+        bullet1 = Bullet(self.x, self.y, dir1, new_size)
+        bullet2 = Bullet(self.x, self.y, dir2, new_size)
+        
+        return [bullet1, bullet2]
+
+# Game functions
+def spawn_bullet():
+    side = random.choice(['top', 'bottom', 'left', 'right'])
+    if side == 'top':
+        x = random.randint(0, GameConfig.CANVAS_WIDTH)
+        y = 0
+        direction = (0, 1)
+    elif side == 'bottom':
+        x = random.randint(0, GameConfig.CANVAS_WIDTH)
+        y = GameConfig.CANVAS_HEIGHT
+        direction = (0, -1)
+    elif side == 'left':
+        x = 0
+        y = random.randint(0, GameConfig.CANVAS_HEIGHT)
+        direction = (1, 0)
+    else:  # right
+        x = GameConfig.CANVAS_WIDTH
+        y = random.randint(0, GameConfig.CANVAS_HEIGHT)
+        direction = (-1, 0)
+    
+    bullet = Bullet(x, y, direction)
+    game_entities.add(bullet)
+
+def spawn_bullets(count):
+    for _ in range(count):
+        spawn_bullet()
+
+def handle_bullet_collisions(bullets):
+    bullets_to_remove = set()
+    new_bullets = []
+
+    for i, bullet in enumerate(bullets):
+        if bullet in bullets_to_remove:
+            continue
+        for j in range(i + 1, len(bullets)):
+            other = bullets[j]
+            if other in bullets_to_remove:
+                continue
+            if bullet.collides_with(other):
+                bullets_to_remove.add(bullet)
+                bullets_to_remove.add(other)
+                new_bullets.extend(bullet.split())
+                new_bullets.extend(other.split())
+                break
+
+    return bullets_to_remove, new_bullets
+
+def update_bullets(delta_time):
+    current_time = pygame.time.get_ticks()
+    bullets_to_remove = set()
+    new_bullets = []
+
+    bullets = [entity for entity in game_entities if isinstance(entity, Bullet)]
+
+    for bullet in bullets:
+        bullet.update(delta_time)
+
+        # Wrap around screen edges
+        bullet.x %= GameConfig.CANVAS_WIDTH
+        bullet.y %= GameConfig.CANVAS_HEIGHT
+
+        if bullet.collides_with(player):
+            player.take_damage(10)
+            bullets_to_remove.add(bullet)
+        elif bullet.should_despawn(current_time):
+            bullets_to_remove.add(bullet)
+
+    collision_removals, collision_new_bullets = handle_bullet_collisions(bullets)
+    bullets_to_remove.update(collision_removals)
+    new_bullets.extend(collision_new_bullets)
+
+    for bullet in bullets_to_remove:
+        if bullet in game_entities:
+            game_entities.remove(bullet)
+
+    game_entities.update(new_bullets)
+
+def restart_game():
+    global start_time, last_bullet_spawn_time, high_score, difficulty_level
+    survived_time = (pygame.time.get_ticks() - start_time) // 1000
+    if survived_time > high_score:
+        high_score = survived_time
+        print(f"New High Score: {high_score} seconds!")
+
+    player.x = GameConfig.CANVAS_WIDTH // 2
+    player.y = GameConfig.CANVAS_HEIGHT // 2
+    player.reset_health()
+    player.is_dead = False
+    player.width = player.height = GameConfig.PLAYER_SIZE
+    player.radius = GameConfig.PLAYER_SIZE // 2
+
+    game_entities.clear()
+    game_entities.add(player)
+
+    start_time = pygame.time.get_ticks()
+    last_bullet_spawn_time = start_time
+    difficulty_level = 1
+
+# Game initialization
+pygame.init()
+screen = pygame.display.set_mode((GameConfig.CANVAS_WIDTH, GameConfig.CANVAS_HEIGHT))
+pygame.display.set_caption("Bullet Dodge Game")
+
+player = Player(100, 100, GameConfig.PLAYER_SIZE, GameConfig.PLAYER_SIZE, GameConfig.PLAYER_COLOR)
+game_entities = {player}
+
+start_time = pygame.time.get_ticks()
+last_bullet_spawn_time = start_time
+high_score = 0
+difficulty_level = 1
+
+# Game loop
+running = True
+clock = pygame.time.Clock()
+last_difficulty_level = 1
+
+while running:
+    delta_time = clock.tick(60) / 1000.0
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+    if player.is_dead:
+        restart_game()
+        difficulty_level = 1  # Reset difficulty level
+        continue
+
+    keys = pygame.key.get_pressed()
+    if keys[pygame.K_LEFT]:
+        player.x = max(player.x - GameConfig.PLAYER_SPEED * delta_time, 0)
+    if keys[pygame.K_RIGHT]:
+        player.x = min(player.x + GameConfig.PLAYER_SPEED * delta_time, GameConfig.CANVAS_WIDTH - player.width)
+    if keys[pygame.K_UP]:
+        player.y = max(player.y - GameConfig.PLAYER_SPEED * delta_time, 0)
+    if keys[pygame.K_DOWN]:
+        player.y = min(player.y + GameConfig.PLAYER_SPEED * delta_time, GameConfig.CANVAS_HEIGHT - player.height)
+
+    current_time = pygame.time.get_ticks()
+    elapsed_time = current_time - start_time
+
+    # Increase difficulty every minute
+    if elapsed_time // GameConfig.DIFFICULTY_INCREASE_INTERVAL >= difficulty_level:
+        difficulty_level = (elapsed_time // GameConfig.DIFFICULTY_INCREASE_INTERVAL) + 1
+        if difficulty_level > last_difficulty_level:
+            player.increase_size()
+            last_difficulty_level = difficulty_level
+
+    if current_time - last_bullet_spawn_time > GameConfig.BULLET_SPAWN_INTERVAL:
+        spawn_bullets(difficulty_level)
+        last_bullet_spawn_time = current_time
+
+    update_bullets(delta_time)
+
+    # Render
+    screen.fill((0, 0, 0))  
+
+    for entity in game_entities:
+        entity.render(screen)
+
+    # Render health bar
+    health_bar_width = 250  
+    health_bar_height = 40  
+    pygame.draw.rect(screen, (128, 128, 128), (10, 10, health_bar_width, health_bar_height))
+    pygame.draw.rect(screen, (0, 255, 0), (10, 10, int(player.health * 2.5), health_bar_height))
+    pygame.draw.rect(screen, (255, 255, 255), (10, 10, health_bar_width, health_bar_height), 2)
+
+    # Render text
+    font = pygame.font.Font(None, 36)
+    health_text = font.render(f"Health: {player.health}", True, (255, 255, 255))
+    text_rect = health_text.get_rect(center=(135, 30))
+    screen.blit(health_text, text_rect)
+
+    current_survival_time = (current_time - start_time) // 1000
+    time_text = font.render(f"Time: {current_survival_time}s", True, (255, 255, 255))
+    screen.blit(time_text, (10, 60))
+
+    high_score_text = font.render(f"High Score: {high_score}s", True, (255, 215, 0))
+    screen.blit(high_score_text, (GameConfig.CANVAS_WIDTH - 250, 10))
+
+    difficulty_text = font.render(f"Difficulty: {difficulty_level}", True, (255, 255, 255))
+    screen.blit(difficulty_text, (10, 100))
+
+    pygame.display.flip()
+
+pygame.quit()
